@@ -1,0 +1,366 @@
+
+var shell   = WScript.CreateObject("Wscript.Shell");
+var fso     = WScript.CreateObject("Scripting.FileSystemObject");
+var filter  = /apache|junit|java/;
+
+/**
+ * Graphを表現するクラス
+ *
+ */
+var Graph   = function(name) {
+    this.name       = name;
+    this.id         = 0;
+    this.backcolor  = null;
+    
+    this.children   = {};
+    this.nodes      = {};
+};
+Graph.serial_number = 0;
+Graph.color         = {r:0xf0, g:0xf0, b:0xff};
+Graph.prototype = {
+    
+    add_children    : function(children) {
+        for (var key in children) {
+            this.children[key] = children[key];
+        }
+    },
+    
+    child           : function(name) {
+        if (!this.children[name]) {
+            this.children[name] = this.newInstance(name);
+        }
+        
+        return this.children[name];
+    },
+    
+    node            : function(fqdn_name, simple_name) {
+        var key = fqdn_name !== "" ? fqdn_name : simple_name;
+        
+        this.nodes[key] = simple_name;
+    },
+    
+    newInstance     : function(name) {
+        var child           = new Graph(name);
+        child.id            = ++Graph.serial_number;
+        
+        if (!this.backcolor) {
+            this.backcolor      = {r:0, g:0, b:0};
+            this.backcolor.r    = Graph.color.r;
+            this.backcolor.g    = Graph.color.g;
+            this.backcolor.b    = Graph.color.b;
+        }
+        
+        child.backcolor     = {r:0, g:0, b:0};
+        child.backcolor.r   = this.backcolor.r - 0x18;
+        child.backcolor.g   = this.backcolor.g - 0x18;
+        child.backcolor.b   = this.backcolor.b;
+        
+        return child;
+    },
+    
+    visit           : function(writer) {
+        writer.write_subgraph(this);
+    },
+    
+    set_name        : function(name) {
+        this.name = name;
+    },
+    
+    get_color       : function() {
+        var red     = this.hex_to_string(this.backcolor.r);
+        var green   = this.hex_to_string(this.backcolor.g);
+        var blue    = this.hex_to_string(this.backcolor.b);
+        
+        return "#" + red + green + blue;
+    },
+    
+    hex_to_string   : function(hex) {
+        var hex = "0" + Number(hex).toString(16).toUpperCase();
+        return hex.substr(hex.length - 2);
+    }
+    
+};
+
+
+/**
+ * dotファイルのルート要素を表現するクラス
+ *
+ */
+var Digraph = function(name) {
+    Graph.call(this, name);
+    this.links  = new Array();
+    this.backcolor = {r:0xff, g:0xff, b:0xff};
+};
+var Dummy = function() {};
+Dummy.prototype = Graph.prototype;
+Digraph.prototype = new Dummy();
+Digraph.prototype.set_links = function(links) {
+    this.links = links;
+}
+
+
+/**
+ * dotファイルライター
+ *
+ */
+var Writer = function() {
+    this.filename   = "class_relation";
+    this.indents    = new Array();
+    this.writer     = null;
+};
+Writer.prototype = {
+    
+    indent          : function() {
+        this.indents.push("  ");
+    },
+    
+    unindent        : function() {
+        this.indents.pop();
+    },
+    
+    tabspace        : function() {
+        return this.indents.join("");
+    },
+    
+    open_dotfile    : function() {
+        var dot_file = this.filename + ".dot";
+        
+        if (fso.FileExists(dot_file)) {
+            fso.DeleteFile(dot_file);
+        }
+        
+        this.writer = fso.OpenTextFile(dot_file, 2, true);
+    },
+    
+    close           : function() {
+        this.writer.Close();
+    },
+    
+    write_graph     : function(graph) {
+        this.open_dotfile();
+        
+        this.write("digraph \"" + graph.name + "\" {");
+        this.indent();
+        this.write("graph [compound = true, ranksep = 1.0, nodesep = 0.75];");
+        this.write("rankdir = LR;");
+        this.write("edge [color = \"#777777\"];");
+        this.write("node [style = filled, fillcolor = \"#ffffff\"];");
+        this.write("");
+        
+        this.write_subgraphs(graph);
+        this.write_nodes(graph);
+        this.write_links(graph);
+        
+        this.unindent();
+        this.write("}");
+        
+        this.close();
+    },
+    
+    write_subgraph     : function(graph) {
+        this.write("subgraph cluster" + graph.id + " {");
+        this.indent();
+        this.write("label   = \"" + graph.name + "\";");
+        this.write("bgcolor = \"" + graph.get_color() + "\"\n;");
+        
+        this.write_subgraphs(graph);
+        this.write_nodes(graph);
+        
+        this.unindent();
+        this.write("}");
+        this.write("");
+    },
+    
+    write_subgraphs : function(graph) {
+        for (var key in graph.children) {
+            graph.children[key].visit(this);
+        }
+    },
+    
+    write_nodes     : function(graph) {
+        for (var key in graph.nodes) {
+            this.write("\"" + key + "\" [label = \"" + graph.nodes[key] + "\"];");
+        }
+        
+        this.write("");
+    },
+    
+    write_links     : function(graph) {
+        for (var i = 0; i < graph.links.length; i++) {
+            var link = graph.links[i];
+            
+            this.write("\"" + link.from + "\" -> \"" + link.to + "\";");
+        }
+        
+        this.write("");
+    },
+    
+    write           : function(statement) {
+        this.writer.WriteLine(this.tabspace() + statement);
+    },
+    
+    generate_graph  : function() {
+        var dot_file = this.filename + ".dot";
+        var png_file = this.filename + ".png";
+        var svg_file = this.filename + ".svg";
+        
+        shell.Run("dot -Tpng -o " + png_file + " " + dot_file);
+        shell.Run("dot -Tsvg -o " + svg_file + " " + dot_file);
+    }
+    
+};
+
+
+/**
+ * DirectoryTracer
+ */
+var DirectoryTracer = function(){
+    this.graphs = {};
+    this.links  = new Array();
+};
+DirectoryTracer.prototype = {
+
+    recursive_trace     : function(directory) {
+        this.do_trace(directory);
+        shell.CurrentDirectory = directory;
+        
+        var graph = new Digraph("class_relation");
+        graph.add_children(this.graphs);
+        graph.set_links(this.links);
+        
+        return graph;
+    },
+    
+    do_trace            : function(directory, parent_graph) {
+        if (!this.has_java_file(directory)) {
+            this.seek_subdirectories(directory, parent_graph);
+            
+            return;
+        }
+        
+        if (!directory.match(/src\\main\\java/)) {
+            return;
+        }
+        
+        var full_path = directory.split(/\\src\\main\\java\\/);
+        var project_name = full_path[0].replace(/.*\\/, "");
+        var package_name = full_path[1].replace(/\\/g, ".");
+        
+        if (package_name.match(filter)) {
+            return;
+        }
+        
+        var graph = this.get_graph(project_name, package_name, parent_graph);
+        
+        shell.CurrentDirectory = directory;
+        this.extract_information("findstr /r /c:\"^import\" *.java", package_name, graph, function(result){return result[0].replace(/.java.*/g, "");});
+        this.extract_information("findstr /r /c:\"public class .*\" *.java", package_name, graph, function(result){return result[0].replace(/.java.*/, "");});
+        this.extract_information("findstr /r /c:\"public static class .*\" *.java", package_name, graph, function(result){return result[0].replace(/.java.*/, "") + "." + result[1].replace(/.*class\s*([^\s]+)\s*{/, "$1");});
+        
+        this.seek_subdirectories(directory, graph);
+    },
+    
+    extract_information : function(command, package_name, graph, get_simple_name) {
+        var results = shell.Exec(command).StdOut.ReadAll().replace(/\r/gm, "").split("\n");
+        
+        for (var i = 0; i < results.length; i++) {
+            if (results[i].length < 1) {
+                break;
+            }
+            
+            var result      = results[i].split(":");
+            var simple_name = get_simple_name(result);
+            var fqdn_name   = package_name + "." + simple_name;
+            
+            graph.node(fqdn_name, simple_name);
+            
+            if (!result[1].match(/import/)) {
+                continue;
+            }
+            
+            var target      = result[1].replace(/^import\s+/g, "").replace(/;\s*/, "");
+            
+            if (target.match(filter)) {
+                continue;
+            }
+            
+            this.links.push({from:fqdn_name, to:target});
+        }
+    },
+    
+    get_graph           : function(project_name, package_name, parent_graph) {
+        if (parent_graph) {
+            return parent_graph.child(package_name);
+        }
+        
+        if (!this.graphs[project_name]) {
+            this.graphs[project_name] = Graph.prototype.newInstance(project_name);
+        }
+        
+        return this.graphs[project_name].child(package_name);
+    },
+    
+    seek_subdirectories : function(parent_directory, parent_graph) {
+        var directories = this.sub_directories(parent_directory);
+        
+        for (directories.moveFirst(); !directories.atEnd(); directories.moveNext()) {
+            this.do_trace(parent_directory + "\\" + directories.item().Name, parent_graph);
+        }
+    },
+    
+    has_java_file       : function(directory) {
+        var files = this.files(directory);
+        
+        if (files.Count < 1) {
+            return false;
+        }
+        
+        for (files.moveFirst(); !files.atEnd(); files.moveNext()) {
+            if (files.item().Name.match(/.java$/)) {
+                return true;
+            }
+        }
+        
+        return false;
+    },
+    
+    files               : function(directory) {
+        return new Enumerator(fso.GetFolder(directory).Files);
+    },
+    
+    sub_directories     : function(directory) {
+        return new Enumerator(fso.GetFolder(directory).SubFolders);
+    }
+    
+};
+
+
+
+(function() {
+    var output_filename = "class_relation_graph";
+    
+    var args = WScript.Arguments;
+    
+    // assert argument count
+    if (args.length < 1) {
+        WScript.Echo("invalid argument.");
+        WScript.Quit();
+    }
+    
+    var root_directory = args.Unnamed(0);
+    
+    // check argument type: directory or file
+    if (!fso.FolderExists(root_directory)) {
+        WScript.Echo("Not found directory or argument is not directory.");
+        WScript.Quit();
+    }
+    
+    shell.CurrentDirectory = root_directory;
+    root_directory = shell.CurrentDirectory;
+    
+    var graph = new DirectoryTracer().recursive_trace(root_directory);
+    
+    var writer = new Writer("sample.dot");
+    writer.write_graph(graph);
+    writer.generate_graph();
+}());
